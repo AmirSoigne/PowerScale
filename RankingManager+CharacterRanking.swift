@@ -47,45 +47,69 @@ extension RankingManager {
         currentPairIndex = 0
         
         // Create temporary RankingItems for the characters
-        // We'll need to fetch character details for this
-        let group = DispatchGroup()
         var characterItems: [RankingItem] = []
         
-        for characterId in characters {
+        // Process characters in batches of 10
+        let batchSize = 10
+        let characterBatches = stride(from: 0, to: characters.count, by: batchSize).map {
+            Array(characters[$0..<min($0 + batchSize, characters.count)])
+        }
+        
+        // Process each batch sequentially
+        processNextBatch(batches: characterBatches, currentIndex: 0, characterItems: characterItems)
+    }
+    
+    private func processNextBatch(batches: [[Int]], currentIndex: Int, characterItems: [RankingItem]) {
+        guard currentIndex < batches.count else {
+            // All batches processed, generate pairs
+            self.pairwiseComparison = self.generateOptimizedPairs(from: characterItems)
+            print("✅ Generated \(self.pairwiseComparison.count) character comparison pairs")
+            return
+        }
+        
+        let batch = batches[currentIndex]
+        let group = DispatchGroup()
+        var batchItems: [RankingItem] = []
+        
+        for characterId in batch {
             group.enter()
             
-            AniListAPI.shared.getCharacterDetails(id: characterId) { character in
-                if let character = character {
-                    // Create a temporary RankingItem for the character
-                    let item = RankingItem(
-                        id: character.id,
-                        title: character.name.full,
-                        coverImage: character.image?.medium ?? "",
-                        status: "Favorite", // All characters have the same status
-                        isAnime: false, // Not used for character ranking
-                        rank: 0,
-                        score: 0,
-                        startDate: nil,
-                        endDate: nil,
-                        isRewatch: false,
-                        rewatchCount: 0,
-                        progress: 0,
-                        summary: character.description,
-                        genres: nil
-                    )
+            APIRateLimiter.shared.executeRequest {
+                AniListAPI.shared.getCharacterDetails(id: characterId) { character in
+                    if let character = character {
+                        // Create a temporary RankingItem for the character
+                        let item = RankingItem(
+                            id: character.id,
+                            title: character.name.full,
+                            coverImage: character.image?.medium ?? "",
+                            status: "Favorite",
+                            isAnime: false,
+                            rank: 0,
+                            score: 0,
+                            startDate: nil,
+                            endDate: nil,
+                            isRewatch: false,
+                            rewatchCount: 0,
+                            progress: 0,
+                            summary: character.description,
+                            genres: nil
+                        )
+                        
+                        batchItems.append(item)
+                    }
                     
-                    characterItems.append(item)
+                    group.leave()
                 }
-                
-                group.leave()
             }
         }
         
-        // When all characters are loaded, generate the pairs
+        // When batch is complete, process next batch
         group.notify(queue: .main) {
-            // Generate the pairs for comparison
-            self.pairwiseComparison = self.generateOptimizedPairs(from: characterItems)
-            print("✅ Generated \(self.pairwiseComparison.count) character comparison pairs")
+            let allItems = characterItems + batchItems
+            // Wait a short while before starting the next batch to avoid rate limiting
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                self.processNextBatch(batches: batches, currentIndex: currentIndex + 1, characterItems: allItems)
+            }
         }
     }
     

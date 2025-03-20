@@ -27,70 +27,73 @@ class AniListAPI {
             return
         }
         
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            if let error = error {
-                print("❌ Error: \(error.localizedDescription)")
-                completion(nil)
-                return
-            }
-            
-            guard let data = data else {
-                print("❌ Error: No data received")
-                completion(nil)
-                return
-            }
-            
-            do {
-                // Define local response structure to avoid conflicts
-                struct LocalAnimeSearchResponse: Codable {
-                    let data: LocalAnimePage
+        // Use the rate limiter for making API requests
+        APIRateLimiter.shared.executeRequest {
+            URLSession.shared.dataTask(with: request) { data, response, error in
+                if let error = error {
+                    print("❌ Error: \(error.localizedDescription)")
+                    completion(nil)
+                    return
                 }
                 
-                struct LocalAnimePage: Codable {
-                    let Page: LocalMediaPage
+                guard let data = data else {
+                    print("❌ Error: No data received")
+                    completion(nil)
+                    return
                 }
                 
-                struct LocalMediaPage: Codable {
-                    let media: [Anime]
-                }
-                
-                let decoder = JSONDecoder()
-                let decodedResponse = try decoder.decode(LocalAnimeSearchResponse.self, from: data)
-                
-                // Add debugging for the first search result
-                if let firstItem = decodedResponse.data.Page.media.first {
-                    let mediaType = firstItem.episodes != nil ? "Anime" : "Manga"
-                    print("✅ First \(mediaType) search result: \(firstItem.title.romaji ?? "Unknown")")
+                do {
+                    // Define local response structure to avoid conflicts
+                    struct LocalAnimeSearchResponse: Codable {
+                        let data: LocalAnimePage
+                    }
                     
-                    // Add studio information debugging
-                    print("- Studio data present: \(firstItem.studios != nil)")
-                    if let studios = firstItem.studios?.nodes {
-                        print("- Number of studios: \(studios.count)")
-                        for studio in studios {
-                            print("  • \(studio.name) (Animation studio: \(studio.isAnimationStudio ?? false))")
+                    struct LocalAnimePage: Codable {
+                        let Page: LocalMediaPage
+                    }
+                    
+                    struct LocalMediaPage: Codable {
+                        let media: [Anime]
+                    }
+                    
+                    let decoder = JSONDecoder()
+                    let decodedResponse = try decoder.decode(LocalAnimeSearchResponse.self, from: data)
+                    
+                    // Add debugging for the first search result
+                    if let firstItem = decodedResponse.data.Page.media.first {
+                        let mediaType = firstItem.episodes != nil ? "Anime" : "Manga"
+                        print("✅ First \(mediaType) search result: \(firstItem.title.romaji ?? "Unknown")")
+                        
+                        // Add studio information debugging
+                        print("- Studio data present: \(firstItem.studios != nil)")
+                        if let studios = firstItem.studios?.nodes {
+                            print("- Number of studios: \(studios.count)")
+                            for studio in studios {
+                                print("  • \(studio.name) (Animation studio: \(studio.isAnimationStudio ?? false))")
+                            }
+                        } else {
+                            print("- No studio data in response")
                         }
-                    } else {
-                        print("- No studio data in response")
+                        
+                        print("- Has characters: \(firstItem.characters?.edges?.count ?? 0) characters")
+                        print("- Has relations: \(firstItem.relations?.edges?.count ?? 0) related media")
+                        if mediaType == "Anime" {
+                            print("- Has streaming episodes: \(firstItem.streamingEpisodes?.count ?? 0) episodes")
+                        }
                     }
                     
-                    print("- Has characters: \(firstItem.characters?.edges?.count ?? 0) characters")
-                    print("- Has relations: \(firstItem.relations?.edges?.count ?? 0) related media")
-                    if mediaType == "Anime" {
-                        print("- Has streaming episodes: \(firstItem.streamingEpisodes?.count ?? 0) episodes")
+                    DispatchQueue.main.async {
+                        completion(decodedResponse.data.Page.media)
                     }
+                } catch {
+                    print("❌ JSON Decoding Error:", error)
+                    if let responseString = String(data: data, encoding: .utf8) {
+                        print("Raw response (first 500 chars): \(String(responseString.prefix(500)))")
+                    }
+                    completion(nil)
                 }
-                
-                DispatchQueue.main.async {
-                    completion(decodedResponse.data.Page.media)
-                }
-            } catch {
-                print("❌ JSON Decoding Error:", error)
-                if let responseString = String(data: data, encoding: .utf8) {
-                    print("Raw response (first 500 chars): \(String(responseString.prefix(500)))")
-                }
-                completion(nil)
-            }
-        }.resume()
+            }.resume()
+        }
     }
     
     func fetchSingleData(graphqlQuery: [String: Any], completion: @escaping (Anime?) -> Void) {
@@ -112,104 +115,107 @@ class AniListAPI {
             return
         }
         
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            if let error = error {
-                print("❌ Error: \(error.localizedDescription)")
-                completion(nil)
-                return
-            }
-            
-            guard let data = data else {
-                print("❌ Error: No data received")
-                completion(nil)
-                return
-            }
-            
-            do {
-                // Define local response structure to avoid conflicts
-                struct LocalAnimeDetailResponse: Codable {
-                    let data: LocalMediaDetail
+        // Use the rate limiter for making API requests
+        APIRateLimiter.shared.executeRequest {
+            URLSession.shared.dataTask(with: request) { data, response, error in
+                if let error = error {
+                    print("❌ Error: \(error.localizedDescription)")
+                    completion(nil)
+                    return
                 }
                 
-                struct LocalMediaDetail: Codable {
-                    let Media: Anime
+                guard let data = data else {
+                    print("❌ Error: No data received")
+                    completion(nil)
+                    return
                 }
                 
-                let decoder = JSONDecoder()
-                let decodedResponse = try decoder.decode(LocalAnimeDetailResponse.self, from: data)
-                
-                // Add debugging - check what data was received
-                let mediaData = decodedResponse.data.Media
-                let mediaType = mediaData.episodes != nil ? "Anime" : "Manga"
-                
-                print("✅ \(mediaType) API Response Fields:")
-                print("- Has studios: \(mediaData.studios != nil)")
-                print("- Has staff: \(mediaData.staff != nil)")
-                print("- Has characters: \(mediaData.characters?.edges?.count ?? 0) characters")
-                print("- Has relations: \(mediaData.relations?.edges?.count ?? 0) related media")
-                print("- Has external links: \(mediaData.externalLinks?.count ?? 0) links")
-                print("- Has recommendations: \(mediaData.recommendations?.nodes?.count ?? 0) recommendations")
-                
-                // Add the detailed studio information as requested
-                print("🎬 API Response for ID \(mediaData.id):")
-                print("- Title: \(mediaData.title.romaji ?? "Unknown")")
-                print("- Studio data present: \(mediaData.studios != nil)")
-                if let studios = mediaData.studios?.nodes {
-                    print("- Number of studios: \(studios.count)")
-                    for studio in studios {
-                        print("  • \(studio.name) (Animation studio: \(studio.isAnimationStudio ?? false))")
-                    }
-                } else {
-                    print("- No studio data in response")
-                }
-                
-                if let studioData = mediaData.studios {
-                    print("📋 Studio data structure:")
-                    print("- Has nodes: \(studioData.nodes != nil)")
-                    print("- Studios count: \(studioData.nodes?.count ?? 0)")
-                    
-                    // Print raw studio data if possible
-                    if let nodes = studioData.nodes {
-                        print("- Studio names: \(nodes.map { $0.name }.joined(separator: ", "))")
-                    }
-                }
-                
-                if mediaType == "Anime" {
-                    print("- Has streaming episodes: \(mediaData.streamingEpisodes?.count ?? 0) episodes")
-                    print("- Has trailer: \(mediaData.trailer != nil)")
-                }
-                
-                // Check specifically for rankings data
-                if let rankings = mediaData.rankings, !rankings.isEmpty {
-                    print("🏆 Rankings information:")
-                    print("- Found \(rankings.count) rankings")
-                    
-                    for (index, rank) in rankings.enumerated() {
-                        print("  • Ranking \(index + 1): Type=\(rank.type), Rank=#\(rank.rank), Context=\(rank.context)")
+                do {
+                    // Define local response structure to avoid conflicts
+                    struct LocalAnimeDetailResponse: Codable {
+                        let data: LocalMediaDetail
                     }
                     
-                    // Look specifically for popularity ranking
-                    if let popularRank = rankings.first(where: { $0.type == "POPULAR" }) {
-                        print("  ★ POPULAR rank = #\(popularRank.rank)")
+                    struct LocalMediaDetail: Codable {
+                        let Media: Anime
+                    }
+                    
+                    let decoder = JSONDecoder()
+                    let decodedResponse = try decoder.decode(LocalAnimeDetailResponse.self, from: data)
+                    
+                    // Add debugging - check what data was received
+                    let mediaData = decodedResponse.data.Media
+                    let mediaType = mediaData.episodes != nil ? "Anime" : "Manga"
+                    
+                    print("✅ \(mediaType) API Response Fields:")
+                    print("- Has studios: \(mediaData.studios != nil)")
+                    print("- Has staff: \(mediaData.staff != nil)")
+                    print("- Has characters: \(mediaData.characters?.edges?.count ?? 0) characters")
+                    print("- Has relations: \(mediaData.relations?.edges?.count ?? 0) related media")
+                    print("- Has external links: \(mediaData.externalLinks?.count ?? 0) links")
+                    print("- Has recommendations: \(mediaData.recommendations?.nodes?.count ?? 0) recommendations")
+                    
+                    // Add the detailed studio information as requested
+                    print("🎬 API Response for ID \(mediaData.id):")
+                    print("- Title: \(mediaData.title.romaji ?? "Unknown")")
+                    print("- Studio data present: \(mediaData.studios != nil)")
+                    if let studios = mediaData.studios?.nodes {
+                        print("- Number of studios: \(studios.count)")
+                        for studio in studios {
+                            print("  • \(studio.name) (Animation studio: \(studio.isAnimationStudio ?? false))")
+                        }
                     } else {
-                        print("  ⚠️ No POPULAR ranking found!")
+                        print("- No studio data in response")
                     }
-                } else {
-                    print("❌ No rankings data found in the response!")
+                    
+                    if let studioData = mediaData.studios {
+                        print("📋 Studio data structure:")
+                        print("- Has nodes: \(studioData.nodes != nil)")
+                        print("- Studios count: \(studioData.nodes?.count ?? 0)")
+                        
+                        // Print raw studio data if possible
+                        if let nodes = studioData.nodes {
+                            print("- Studio names: \(nodes.map { $0.name }.joined(separator: ", "))")
+                        }
+                    }
+                    
+                    if mediaType == "Anime" {
+                        print("- Has streaming episodes: \(mediaData.streamingEpisodes?.count ?? 0) episodes")
+                        print("- Has trailer: \(mediaData.trailer != nil)")
+                    }
+                    
+                    // Check specifically for rankings data
+                    if let rankings = mediaData.rankings, !rankings.isEmpty {
+                        print("🏆 Rankings information:")
+                        print("- Found \(rankings.count) rankings")
+                        
+                        for (index, rank) in rankings.enumerated() {
+                            print("  • Ranking \(index + 1): Type=\(rank.type), Rank=#\(rank.rank), Context=\(rank.context)")
+                        }
+                        
+                        // Look specifically for popularity ranking
+                        if let popularRank = rankings.first(where: { $0.type == "POPULAR" }) {
+                            print("  ★ POPULAR rank = #\(popularRank.rank)")
+                        } else {
+                            print("  ⚠️ No POPULAR ranking found!")
+                        }
+                    } else {
+                        print("❌ No rankings data found in the response!")
+                    }
+                    
+                    DispatchQueue.main.async {
+                        completion(decodedResponse.data.Media)
+                    }
+                } catch {
+                    print("❌ JSON Decoding Error:", error)
+                    // Print raw response for debugging
+                    if let responseString = String(data: data, encoding: .utf8) {
+                        print("Raw response (first 500 chars): \(String(responseString.prefix(500)))")
+                    }
+                    completion(nil)
                 }
-                
-                DispatchQueue.main.async {
-                    completion(decodedResponse.data.Media)
-                }
-            } catch {
-                print("❌ JSON Decoding Error:", error)
-                // Print raw response for debugging
-                if let responseString = String(data: data, encoding: .utf8) {
-                    print("Raw response (first 500 chars): \(String(responseString.prefix(500)))")
-                }
-                completion(nil)
-            }
-        }.resume()
+            }.resume()
+        }
     }
     
     // MARK: - Helper Methods

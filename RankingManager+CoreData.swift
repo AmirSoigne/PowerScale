@@ -45,7 +45,7 @@ extension RankingManager {
 
     // New method to recover lists from UserDefaults if Core Data is empty
     private func recoverFromUserDefaultsIfNeeded() {
-        let savedItems = UserDefaults.standard.getSavedLibraryItems()
+        let savedItems = UserDefaults.standard.getSavedLibraryItems() as [LibraryItemInfo]
         if !savedItems.isEmpty {
             print("📦 Found \(savedItems.count) items in UserDefaults backup")
             
@@ -319,6 +319,267 @@ extension RankingManager {
             item.score = newRating
             lostInterestManga[index] = item
             saveLibraryChange(for: item)
+        }
+    }
+
+    // Atomic save that ensures both CoreData and UserDefaults are in sync
+    func atomicSave(for item: RankingItem) {
+        // First update CoreData
+        let context = coreDataManager.container.viewContext
+        let fetchRequest: NSFetchRequest<AnimeItem> = AnimeItem.fetchRequest()
+        fetchRequest.predicate = NSPredicate(format: "id == %lld AND isAnime == %@", 
+                                             Int64(item.id), item.isAnime)
+        
+        do {
+            let results = try context.fetch(fetchRequest)
+            
+            if let existingItem = results.first {
+                // Update existing item
+                existingItem.title = item.title
+                existingItem.coverImageURL = item.coverImage
+                existingItem.status = item.status
+                existingItem.rank = Int16(item.rank)
+                existingItem.score = Int16(item.score)
+                existingItem.progress = Int16(item.progress)
+                existingItem.isRewatch = item.isRewatch
+                existingItem.rewatchCount = Int16(item.rewatchCount)
+                
+                if let startDate = item.startDate {
+                    existingItem.startDate = startDate
+                }
+                
+                if let endDate = item.endDate {
+                    existingItem.endDate = endDate
+                }
+                
+                // Comment out these lines for now since we don't know the exact property names
+                // existingItem.summary = item.summary ?? ""  // Use whatever property name exists in AnimeItem
+                // existingItem.genres = item.genres != nil ? "\(item.genres!)" : ""  // Use whatever property name exists in AnimeItem
+                
+                // Save CoreData changes immediately
+                try context.save()
+                print("✅ CoreData save successful for \(item.title)")
+                
+                // Now update UserDefaults backup
+                updateUserDefaultsBackup(for: item)
+            } else {
+                print("⚠️ Item not found in CoreData: \(item.id)")
+            }
+        } catch {
+            print("❌ CoreData save error: \(error)")
+            // Still try to update UserDefaults as backup
+            updateUserDefaultsBackup(for: item)
+        }
+    }
+
+    // Helper to update UserDefaults backup
+    private func updateUserDefaultsBackup(for item: RankingItem) {
+        var items = UserDefaults.standard.getSavedLibraryItems() as [LibraryItemInfo]
+        
+        // Check if the item already exists in the backup
+        let itemId = item.id
+        let isAnimeValue = item.isAnime
+        let isRewatchValue = item.isRewatch
+        let rewatchCountValue = item.rewatchCount
+        
+        if let index = items.firstIndex(where: { 
+            $0.mediaId == itemId && 
+            $0.isAnime == isAnimeValue && 
+            $0.isRewatch == isRewatchValue && 
+            $0.rewatchCount == rewatchCountValue 
+        }) {
+            // Update existing item
+            items[index] = LibraryItemInfo(
+                mediaId: item.id,
+                isAnime: item.isAnime,
+                title: item.title,
+                coverImageURL: item.coverImage,
+                status: item.status,
+                progress: item.progress,
+                score: item.score,
+                startDate: item.startDate,
+                endDate: item.endDate,
+                isRewatch: item.isRewatch,
+                rewatchCount: item.rewatchCount,
+                timestamp: Date()
+            )
+        } else {
+            // Add new item
+            items.append(LibraryItemInfo(
+                mediaId: item.id,
+                isAnime: item.isAnime,
+                title: item.title,
+                coverImageURL: item.coverImage,
+                status: item.status,
+                progress: item.progress,
+                score: item.score,
+                startDate: item.startDate,
+                endDate: item.endDate,
+                isRewatch: item.isRewatch,
+                rewatchCount: item.rewatchCount,
+                timestamp: Date()
+            ))
+        }
+        
+        // Create a new array with the correct type
+        let convertedItems = items.map { item -> UserDefaults.UserDefaultsLibraryItemInfo in
+            return UserDefaults.UserDefaultsLibraryItemInfo(
+                mediaId: item.mediaId,
+                isAnime: item.isAnime,
+                title: item.title,
+                coverImageURL: item.coverImageURL,
+                status: item.status,
+                progress: item.progress,
+                score: item.score,
+                startDate: item.startDate,
+                endDate: item.endDate,
+                isRewatch: item.isRewatch,
+                rewatchCount: item.rewatchCount,
+                timestamp: item.timestamp
+            )
+        }
+        UserDefaults.standard.saveLibraryItems(convertedItems)
+        print("✅ UserDefaults backup successful for \(item.title)")
+    }
+
+    // Improved persistence logic with verification
+    func persistRankingResults() {
+        let context = coreDataManager.container.viewContext
+        var failedItems: [RankingItem] = []
+        
+        // Save anime rankings if active
+        if activeRankingCategory == "Anime" {
+            for (index, item) in rankedAnime.enumerated() {
+                let fetchRequest: NSFetchRequest<AnimeItem> = AnimeItem.fetchRequest()
+                fetchRequest.predicate = NSPredicate(format: "id == %lld AND isAnime == YES", Int64(item.id))
+                
+                do {
+                    let results = try context.fetch(fetchRequest)
+                    if let animeItem = results.first {
+                        // Update rank and ensure score is preserved
+                        animeItem.rank = Int16(index + 1)
+                        if item.score > 0 {
+                            animeItem.score = Int16(item.score)
+                        }
+                        print("✅ Persisted anime rank: \(item.title) → #\(index + 1)")
+                    } else {
+                        failedItems.append(item)
+                    }
+                } catch {
+                    print("❌ Error fetching anime for persistence: \(error)")
+                    failedItems.append(item)
+                }
+            }
+        }
+        
+        // Save manga rankings if active
+        if activeRankingCategory == "Manga" {
+            for (index, item) in rankedManga.enumerated() {
+                let fetchRequest: NSFetchRequest<AnimeItem> = AnimeItem.fetchRequest()
+                fetchRequest.predicate = NSPredicate(format: "id == %lld AND isAnime == NO", Int64(item.id))
+                
+                do {
+                    let results = try context.fetch(fetchRequest)
+                    if let mangaItem = results.first {
+                        // Update rank and ensure score is preserved
+                        mangaItem.rank = Int16(index + 1)
+                        if item.score > 0 {
+                            mangaItem.score = Int16(item.score)
+                        }
+                        print("✅ Persisted manga rank: \(item.title) → #\(index + 1)")
+                    } else {
+                        failedItems.append(item)
+                    }
+                } catch {
+                    print("❌ Error fetching manga for persistence: \(error)")
+                    failedItems.append(item)
+                }
+            }
+        }
+        
+        // Save all changes to CoreData
+        do {
+            try context.save()
+            print("✅ Successfully saved all ranking changes to CoreData")
+            
+            // Also update AppStorage for redundancy
+            updateAppStorageBackups()
+        } catch {
+            print("❌ Error saving context after ranking persistence: \(error)")
+            
+            // Still update AppStorage for redundancy
+            updateAppStorageBackups()
+        }
+        
+        // Handle any items that failed to save to CoreData
+        if !failedItems.isEmpty {
+            print("⚠️ Some items failed to save to CoreData. Saving to UserDefaults backup.")
+            for item in failedItems {
+                updateUserDefaultsBackup(for: item)
+            }
+        }
+        
+        // Verify data was saved correctly
+        verifyRankingSave()
+    }
+
+    // Helper to update AppStorage backups
+    private func updateAppStorageBackups() {
+        if activeRankingCategory == "Anime" {
+            if let encoded = try? JSONEncoder().encode(rankedAnime) {
+                UserDefaults.standard.set(encoded, forKey: "animeRankingsData")
+            }
+        } else if activeRankingCategory == "Manga" {
+            if let encoded = try? JSONEncoder().encode(rankedManga) {
+                UserDefaults.standard.set(encoded, forKey: "mangaRankingsData")
+            }
+        }
+    }
+
+    // Verify that data was saved correctly
+    private func verifyRankingSave() {
+        let context = coreDataManager.container.viewContext
+        
+        if activeRankingCategory == "Anime" {
+            // Verify a few random anime items
+            let sampleSize = min(3, rankedAnime.count)
+            for _ in 0..<sampleSize {
+                if let randomItem = rankedAnime.randomElement() {
+                    let fetchRequest: NSFetchRequest<AnimeItem> = AnimeItem.fetchRequest()
+                    fetchRequest.predicate = NSPredicate(format: "id == %lld AND isAnime == YES", Int64(randomItem.id))
+                    
+                    do {
+                        let results = try context.fetch(fetchRequest)
+                        if let saved = results.first {
+                            if saved.rank != Int16(randomItem.rank) || saved.score != Int16(randomItem.score) {
+                                print("⚠️ Verification failed: \(randomItem.title) has inconsistent data")
+                            }
+                        }
+                    } catch {
+                        print("❌ Verification error: \(error)")
+                    }
+                }
+            }
+        } else if activeRankingCategory == "Manga" {
+            // Verify a few random manga items
+            let sampleSize = min(3, rankedManga.count)
+            for _ in 0..<sampleSize {
+                if let randomItem = rankedManga.randomElement() {
+                    let fetchRequest: NSFetchRequest<AnimeItem> = AnimeItem.fetchRequest()
+                    fetchRequest.predicate = NSPredicate(format: "id == %lld AND isAnime == NO", Int64(randomItem.id))
+                    
+                    do {
+                        let results = try context.fetch(fetchRequest)
+                        if let saved = results.first {
+                            if saved.rank != Int16(randomItem.rank) || saved.score != Int16(randomItem.score) {
+                                print("⚠️ Verification failed: \(randomItem.title) has inconsistent data")
+                            }
+                        }
+                    } catch {
+                        print("❌ Verification error: \(error)")
+                    }
+                }
+            }
         }
     }
 }

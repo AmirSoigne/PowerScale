@@ -148,8 +148,8 @@ extension RankingItem {
         )
     }
     
-    /// Composite Score combining the user’s rating and ranking.
-    /// - The user’s rating (score) is assumed to be on a 0–10 scale (multiplied by 10).
+    /// Composite Score combining the user's rating and ranking.
+    /// - The user's rating (score) is assumed to be on a 0–10 scale (multiplied by 10).
     /// - The ranking factor is computed such that rank 1 gives 100, rank 2 gives 90, etc.
     /// - The two are combined using a weighted average (70% rating, 30% ranking).
     var compositeScore: Double {

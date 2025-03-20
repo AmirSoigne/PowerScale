@@ -8,51 +8,22 @@ extension UserDefaults {
         static let libraryItems = "com.powerscale.libraryItems"
     }
     
-    // Structure to store library item information
-    struct LibraryItemInfo: Codable {
-        let mediaId: Int
-        let isAnime: Bool
-        let title: String
-        let coverImageURL: String
-        let status: String
-        let progress: Int
-        let score: Double
-        let startDate: Date?
-        let endDate: Date?
-        let isRewatch: Bool
-        let rewatchCount: Int
-        let timestamp: Date
-        
-        // Convert to RankingItem
-        func toRankingItem() -> RankingItem {
-            return RankingItem(
-                id: mediaId,
-                title: title,
-                coverImage: coverImageURL,
-                status: status,
-                isAnime: isAnime,
-                rank: 0,  // Default rank, will be updated later
-                score: score,
-                startDate: startDate,
-                endDate: endDate,
-                isRewatch: isRewatch,
-                rewatchCount: rewatchCount,
-                progress: progress,
-                summary: nil,
-                genres: nil
-            )
-        }
-    }
-    
     // Save library item status
     func saveLibraryItem(from item: RankingItem) {
-        var items = getSavedLibraryItems()
+        var items = getSavedLibraryItems() as [LibraryItemInfo]
         
         // Remove existing entry for this item
-        items.removeAll { $0.mediaId == item.id &&
-                          $0.isAnime == item.isAnime &&
-                          $0.isRewatch == item.isRewatch &&
-                          $0.rewatchCount == item.rewatchCount }
+        let itemId = item.id
+        let isAnimeValue = item.isAnime
+        let isRewatchValue = item.isRewatch
+        let rewatchCountValue = item.rewatchCount
+        
+        items.removeAll { 
+            $0.mediaId == itemId && 
+            $0.isAnime == isAnimeValue && 
+            $0.isRewatch == isRewatchValue && 
+            $0.rewatchCount == rewatchCountValue 
+        }
         
         // Create new info
         let newInfo = LibraryItemInfo(
@@ -116,7 +87,7 @@ extension UserDefaults {
     
     // Update progress for a library item
     func updateLibraryItemProgress(id: Int, isAnime: Bool, isRewatch: Bool, rewatchCount: Int, progress: Int) {
-        var items = getSavedLibraryItems()
+        var items = getSavedLibraryItems() as [LibraryItemInfo]
         
         // Find and update the item
         if let index = items.firstIndex(where: {
@@ -155,73 +126,7 @@ extension UserDefaults {
         static let winCounts = "com.powerscale.savedWinCounts"
         static let pairwiseItems = "com.powerscale.savedPairwiseItems"
         static let activeRankingItems = "com.powerscale.activeRankingItems"
-    }
-    
-    // Structure to store each pair for comparison
-    struct PairwiseComparisonPair: Codable {
-        let firstItemId: Int
-        let secondItemId: Int
-        let timestamp: Date
-        
-        init(firstItemId: Int, secondItemId: Int) {
-            self.firstItemId = firstItemId
-            self.secondItemId = secondItemId
-            self.timestamp = Date()
-        }
-    }
-    
-    // Structure to store session information
-    struct PairwiseSessionInfo: Codable {
-        let category: String
-        let pairwiseItems: [PairwiseComparisonPair]
-        let currentPairIndex: Int
-        let winCounts: [Int: Int]
-        let activeRankingItemIds: [Int]
-        let timestamp: Date
-        
-        init(category: String, pairwiseItems: [PairwiseComparisonPair], currentPairIndex: Int, winCounts: [Int: Int], activeRankingItemIds: [Int]) {
-            self.category = category
-            self.pairwiseItems = pairwiseItems
-            self.currentPairIndex = currentPairIndex
-            self.winCounts = winCounts
-            self.activeRankingItemIds = activeRankingItemIds
-            self.timestamp = Date()
-        }
-    }
-    
-    // Save complete pairwise session to UserDefaults
-    func savePairwiseSession(session: PairwiseSessionInfo) {
-        do {
-            // Encode the session info
-            let data = try JSONEncoder().encode(session)
-            
-            // Save all components
-            UserDefaults.standard.set(true, forKey: PairwiseKeys.hasSavedSession)
-            UserDefaults.standard.set(session.category, forKey: PairwiseKeys.rankingCategory)
-            UserDefaults.standard.set(session.currentPairIndex, forKey: PairwiseKeys.currentPairIndex)
-            UserDefaults.standard.set(data, forKey: PairwiseKeys.pairwiseItems)
-            
-            print("✅ Saved pairwise session to UserDefaults")
-        } catch {
-            print("❌ Error encoding pairwise session: \(error)")
-        }
-    }
-    
-    // Get saved pairwise session from UserDefaults
-    func getSavedPairwiseSession() -> PairwiseSessionInfo? {
-        guard UserDefaults.standard.bool(forKey: PairwiseKeys.hasSavedSession),
-              let category = UserDefaults.standard.string(forKey: PairwiseKeys.rankingCategory),
-              let data = UserDefaults.standard.data(forKey: PairwiseKeys.pairwiseItems) else {
-            return nil
-        }
-        
-        do {
-            let decodedSession = try JSONDecoder().decode(PairwiseSessionInfo.self, from: data)
-            return decodedSession
-        } catch {
-            print("❌ Error decoding pairwise session: \(error)")
-            return nil
-        }
+        static let savedPairwiseSession = "com.powerscale.savedPairwiseSession"
     }
     
     // Clear saved pairwise session
@@ -232,6 +137,7 @@ extension UserDefaults {
         UserDefaults.standard.removeObject(forKey: PairwiseKeys.pairwiseItems)
         UserDefaults.standard.removeObject(forKey: PairwiseKeys.winCounts)
         UserDefaults.standard.removeObject(forKey: PairwiseKeys.activeRankingItems)
+        UserDefaults.standard.removeObject(forKey: PairwiseKeys.savedPairwiseSession)
         
         print("✅ Cleared pairwise session from UserDefaults")
     }
@@ -281,8 +187,29 @@ public class RankingManager: ObservableObject {
     
     // Private initializer for singleton pattern
     private init() {
+        // First load from Core Data
         loadAllDataFromCoreData()
-        loadFromPersistentStorage()
+        
+        // Validate and recover state if needed
+        validateAndRecoverState()
+        
+        print("✅ RankingManager initialized with data from CoreData")
+        
+        // Debug current state
+        debugPrintDataCounts()
+        
+        // Set up a timer to periodically save data (every 5 minutes)
+        Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
+            self?.autoSaveChanges()
+        }
+    }
+    
+    private func debugPrintDataCounts() {
+        print("📊 Current data counts:")
+        print("- Ranked anime: \(rankedAnime.count)")
+        print("- Ranked manga: \(rankedManga.count)")
+        print("- Currently watching: \(currentlyWatching.count)")
+        print("- Currently reading: \(currentlyReading.count)")
     }
     
     // Modified addItem method to ensure items are only in one category at a time
@@ -738,472 +665,433 @@ public class RankingManager: ObservableObject {
         }
     }
     
-        // Enhanced method to save ranking session
-            func saveRankingSession() {
-                // Existing code to set properties
-                hasSavedRankingSession = true
-                savedRankingCategory = activeRankingCategory
-                savedPairwiseComparison = pairwiseComparison
-                savedCurrentPairIndex = currentPairIndex
-                savedWinCounts = winCounts
-                
-                // New code to save to UserDefaults
-                saveToPersistentStorage()
+    // Enhanced method to save ranking session
+    func saveRankingSession() {
+        // Existing code to set properties
+        hasSavedRankingSession = true
+        savedRankingCategory = activeRankingCategory
+        savedPairwiseComparison = pairwiseComparison
+        savedCurrentPairIndex = currentPairIndex
+        savedWinCounts = winCounts
+        
+        // New code to save to UserDefaults
+        saveToPersistentStorage()
+    }
+    
+    // Enhanced method to save to UserDefaults (updated version)
+    func saveToPersistentStorage() {
+        // Save basic session information
+        UserDefaults.standard.set(hasSavedRankingSession, forKey: PairwiseKeys.hasSavedSession)
+        UserDefaults.standard.set(savedRankingCategory, forKey: PairwiseKeys.rankingCategory)
+        UserDefaults.standard.set(savedCurrentPairIndex, forKey: PairwiseKeys.currentPairIndex)
+        
+        // Convert pairwise comparison to a saveable format
+        if !savedPairwiseComparison.isEmpty {
+            var pairwisePairs = [PairwiseComparisonPair]()
+            for (item1, item2) in savedPairwiseComparison {
+                pairwisePairs.append(PairwiseComparisonPair(
+                    firstItemId: item1.id,
+                    secondItemId: item2.id
+                ))
             }
             
-            // Enhanced method to save to UserDefaults (updated version)
-            func saveToPersistentStorage() {
-                // Save basic session information
-                UserDefaults.standard.set(hasSavedRankingSession, forKey: "hasSavedRankingSession")
-                UserDefaults.standard.set(savedRankingCategory, forKey: "savedRankingCategory")
-                UserDefaults.standard.set(savedCurrentPairIndex, forKey: "savedCurrentPairIndex")
-                
-                // Convert pairwise comparison to a saveable format
-                if !savedPairwiseComparison.isEmpty {
-                    var pairwisePairs = [UserDefaults.PairwiseComparisonPair]()
-                    for (item1, item2) in savedPairwiseComparison {
-                        pairwisePairs.append(UserDefaults.PairwiseComparisonPair(
-                            firstItemId: item1.id,
-                            secondItemId: item2.id
-                        ))
-                    }
-                    
-                    // Get IDs of all items involved in the ranking
-                    var activeItemIds = Set<Int>()
-                    for (item1, item2) in savedPairwiseComparison {
-                        activeItemIds.insert(item1.id)
-                        activeItemIds.insert(item2.id)
-                    }
-                    
-                    // Create the session info
-                    let sessionInfo = UserDefaults.PairwiseSessionInfo(
-                        category: savedRankingCategory,
-                        pairwiseItems: pairwisePairs,
-                        currentPairIndex: savedCurrentPairIndex,
-                        winCounts: savedWinCounts,
-                        activeRankingItemIds: Array(activeItemIds)
-                    )
-                    
-                    // Save to UserDefaults
-                    UserDefaults.standard.savePairwiseSession(session: sessionInfo)
-                } else {
-                    // If there's no comparison data, just save the win counts
-                    if let data = try? JSONEncoder().encode(savedWinCounts) {
-                        UserDefaults.standard.set(data, forKey: "savedWinCounts")
-                    }
-                }
+            // Extract active item IDs
+            var activeItemIds = Set<Int>()
+            for (item1, item2) in savedPairwiseComparison {
+                activeItemIds.insert(item1.id)
+                activeItemIds.insert(item2.id)
             }
             
-            // Enhanced method to load from persistent storage
-            func loadFromPersistentStorage() {
-                // Load the basic session flags
-                hasSavedRankingSession = UserDefaults.standard.bool(forKey: "hasSavedRankingSession")
-                savedRankingCategory = UserDefaults.standard.string(forKey: "savedRankingCategory") ?? ""
-                savedCurrentPairIndex = UserDefaults.standard.integer(forKey: "savedCurrentPairIndex")
-                
-                // Load win counts
-                if let data = UserDefaults.standard.data(forKey: "savedWinCounts") {
-                    if let decoded = try? JSONDecoder().decode([Int: Int].self, from: data) {
-                        savedWinCounts = decoded
-                    }
-                }
-                
-                // Try to load the full session info
-                if hasSavedRankingSession, let session = UserDefaults.standard.getSavedPairwiseSession() {
-                    print("📊 Loaded pairwise session from UserDefaults")
-                    
-                    // Reconstitute the pairwise comparison pairs using the item IDs
-                    recreatePairwiseComparison(from: session)
-                }
-            }
+            // Create the session info
+            let sessionInfo = PairwiseSessionInfo(
+                category: savedRankingCategory,
+                pairwiseItems: pairwisePairs,
+                currentPairIndex: savedCurrentPairIndex,
+                winCounts: savedWinCounts,
+                activeRankingItemIds: Array(activeItemIds)
+            )
             
-            // Helper method to recreate the pairwise comparison from saved IDs
-            private func recreatePairwiseComparison(from session: UserDefaults.PairwiseSessionInfo) {
-                // Early exit if there are no pairs
-                if session.pairwiseItems.isEmpty {
-                    return
-                }
-                
-                // First, create a dictionary of all items by ID for quick lookup
-                var itemsById = [Int: RankingItem]()
-                
-                // The items could be in any list depending on their status
-                // Anime lists
-                for item in rankedAnime + currentlyWatching + wantToWatch + onHoldAnime + lostInterestAnime {
-                    itemsById[item.id] = item
-                }
-                
-                // Manga lists
-                for item in rankedManga + currentlyReading + wantToRead + onHoldManga + lostInterestManga {
-                    itemsById[item.id] = item
-                }
-                
-                // Now recreate the pairwise comparisons
-                savedPairwiseComparison = []
-                
-                for pair in session.pairwiseItems {
-                    if let item1 = itemsById[pair.firstItemId],
-                       let item2 = itemsById[pair.secondItemId] {
-                        savedPairwiseComparison.append((item1, item2))
-                    }
-                }
-                
-                // Update the saved win counts
-                savedWinCounts = session.winCounts
-                
-                // Log the recovery status
-                print("📊 Recreated \(savedPairwiseComparison.count)/\(session.pairwiseItems.count) pairwise comparisons")
-                
-                // Make sure the current pair index is valid
-                if savedCurrentPairIndex >= savedPairwiseComparison.count {
-                    savedCurrentPairIndex = savedPairwiseComparison.count - 1
-                    if savedCurrentPairIndex < 0 {
-                        savedCurrentPairIndex = 0
-                    }
+            // Save to UserDefaults
+            UserDefaults.standard.savePairwiseSession(session: sessionInfo)
+        } else {
+            // If there's no comparison data, just save the win counts
+            if let data = try? JSONEncoder().encode(savedWinCounts) {
+                UserDefaults.standard.set(data, forKey: PairwiseKeys.winCounts)
+            }
+        }
+    }
+    
+    // Enhanced method to load from persistent storage
+    func loadFromPersistentStorage() {
+        // Load the basic session flags
+        hasSavedRankingSession = UserDefaults.standard.bool(forKey: PairwiseKeys.hasSavedSession)
+        savedRankingCategory = UserDefaults.standard.string(forKey: PairwiseKeys.rankingCategory) ?? ""
+        savedCurrentPairIndex = UserDefaults.standard.integer(forKey: PairwiseKeys.currentPairIndex)
+        
+        // Load win counts
+        if let data = UserDefaults.standard.data(forKey: PairwiseKeys.winCounts) {
+            if let decoded = try? JSONDecoder().decode([Int: Int].self, from: data) {
+                savedWinCounts = decoded
+            }
+        }
+        
+        // Try to load the full session info
+        if hasSavedRankingSession, let session = UserDefaults.standard.getSavedPairwiseSession() {
+            print("📊 Loaded pairwise session from UserDefaults")
+            
+            // Reconstitute the pairwise comparison pairs using the item IDs
+            recreatePairwiseComparison(from: session)
+        }
+    }
+    
+    // Method to resume a saved session
+    func resumeSavedSession() {
+        if hasSavedRankingSession {
+            activeRankingCategory = savedRankingCategory
+            pairwiseComparison = savedPairwiseComparison
+            currentPairIndex = savedCurrentPairIndex
+            winCounts = savedWinCounts
+            isPairwiseRankingActive = true
+            pairwiseCompleted = false
+        }
+    }
+    
+    // Clear the saved session (enhanced version)
+    func clearSavedSession() {
+        hasSavedRankingSession = false
+        savedRankingCategory = ""
+        savedPairwiseComparison = []
+        savedCurrentPairIndex = 0
+        savedWinCounts = [:]
+        
+        // Clear in UserDefaults
+        UserDefaults.standard.clearSavedPairwiseSession()
+    }
+    
+    // New method to recover lists from UserDefaults if Core Data is empty
+    private func recoverFromUserDefaultsIfNeeded() {
+        let savedItems = UserDefaults.standard.getSavedLibraryItems() as [LibraryItemInfo]
+        if !savedItems.isEmpty {
+            print("📦 Found \(savedItems.count) items in UserDefaults backup")
+            
+            // Only recover lists that are empty
+            if currentlyWatching.isEmpty {
+                let recovered = savedItems.filter {
+                    $0.isAnime && $0.status == "Currently Watching" && !$0.isRewatch
+                }.map { $0.toRankingItem() }
+                if !recovered.isEmpty {
+                    print("🔄 Recovering \(recovered.count) Currently Watching items from backup")
+                    currentlyWatching = recovered
                 }
             }
             
-            // Method to resume a saved session
-            func resumeSavedSession() {
-                if hasSavedRankingSession {
-                    activeRankingCategory = savedRankingCategory
-                    pairwiseComparison = savedPairwiseComparison
-                    currentPairIndex = savedCurrentPairIndex
-                    winCounts = savedWinCounts
-                    isPairwiseRankingActive = true
-                    pairwiseCompleted = false
+            if rankedAnime.isEmpty {
+                let recovered = savedItems.filter {
+                    $0.isAnime && $0.status == "Completed" && !$0.isRewatch
+                }.map { $0.toRankingItem() }
+                if !recovered.isEmpty {
+                    print("🔄 Recovering \(recovered.count) Completed Anime items from backup")
+                    rankedAnime = recovered
                 }
             }
             
-            // Clear the saved session (enhanced version)
-            func clearSavedSession() {
+            if wantToWatch.isEmpty {
+                let recovered = savedItems.filter {
+                    $0.isAnime && $0.status == "Want to Watch"
+                }.map { $0.toRankingItem() }
+                if !recovered.isEmpty {
+                    print("🔄 Recovering \(recovered.count) Want to Watch items from backup")
+                    wantToWatch = recovered
+                }
+            }
+            
+            if onHoldAnime.isEmpty {
+                let recovered = savedItems.filter {
+                    $0.isAnime && $0.status == "On Hold"
+                }.map { $0.toRankingItem() }
+                if !recovered.isEmpty {
+                    print("🔄 Recovering \(recovered.count) On Hold Anime items from backup")
+                    onHoldAnime = recovered
+                }
+            }
+            
+            if lostInterestAnime.isEmpty {
+                let recovered = savedItems.filter {
+                    $0.isAnime && $0.status == "Lost Interest"
+                }.map { $0.toRankingItem() }
+                if !recovered.isEmpty {
+                    print("🔄 Recovering \(recovered.count) Lost Interest Anime items from backup")
+                    lostInterestAnime = recovered
+                }
+            }
+            
+            if completedRewatchesAnime.isEmpty {
+                let recovered = savedItems.filter {
+                    $0.isAnime && $0.status == "Completed" && $0.isRewatch
+                }.map { $0.toRankingItem() }
+                if !recovered.isEmpty {
+                    print("🔄 Recovering \(recovered.count) Completed Rewatch Anime items from backup")
+                    completedRewatchesAnime = recovered
+                }
+            }
+            
+            // Manga lists recovery
+            if currentlyReading.isEmpty {
+                let recovered = savedItems.filter {
+                    !$0.isAnime && $0.status == "Currently Reading" && !$0.isRewatch
+                }.map { $0.toRankingItem() }
+                if !recovered.isEmpty {
+                    print("🔄 Recovering \(recovered.count) Currently Reading items from backup")
+                    currentlyReading = recovered
+                }
+            }
+            
+            if rankedManga.isEmpty {
+                let recovered = savedItems.filter {
+                    !$0.isAnime && $0.status == "Completed" && !$0.isRewatch
+                }.map { $0.toRankingItem() }
+                if !recovered.isEmpty {
+                    print("🔄 Recovering \(recovered.count) Completed Manga items from backup")
+                    rankedManga = recovered
+                }
+            }
+            
+            if wantToRead.isEmpty {
+                let recovered = savedItems.filter {
+                    !$0.isAnime && $0.status == "Want to Read"
+                }.map { $0.toRankingItem() }
+                if !recovered.isEmpty {
+                    print("🔄 Recovering \(recovered.count) Want to Read items from backup")
+                    wantToRead = recovered
+                }
+            }
+            
+            if onHoldManga.isEmpty {
+                let recovered = savedItems.filter {
+                    !$0.isAnime && $0.status == "On Hold"
+                }.map { $0.toRankingItem() }
+                if !recovered.isEmpty {
+                    print("🔄 Recovering \(recovered.count) On Hold Manga items from backup")
+                    onHoldManga = recovered
+                }
+            }
+            
+            if lostInterestManga.isEmpty {
+                let recovered = savedItems.filter {
+                    !$0.isAnime && $0.status == "Lost Interest"
+                }.map { $0.toRankingItem() }
+                if !recovered.isEmpty {
+                    print("🔄 Recovering \(recovered.count) Lost Interest Manga items from backup")
+                    lostInterestManga = recovered
+                }
+            }
+            
+            if completedRewatchesManga.isEmpty {
+                let recovered = savedItems.filter {
+                    !$0.isAnime && $0.status == "Completed" && $0.isRewatch
+                }.map { $0.toRankingItem() }
+                if !recovered.isEmpty {
+                    print("🔄 Recovering \(recovered.count) Completed Reread Manga items from backup")
+                    completedRewatchesManga = recovered
+                }
+            }
+            
+            // After recovery, save any recovered items to Core Data
+            syncRecoveredItemsToCoreData()
+        }
+    }
+    
+    // Sync recovered items back to Core Data
+    private func syncRecoveredItemsToCoreData() {
+        // For each list, save items to Core Data
+        for item in currentlyWatching + rankedAnime + wantToWatch + onHoldAnime + lostInterestAnime +
+                   completedRewatchesAnime + currentlyReading + rankedManga + wantToRead +
+                   onHoldManga + lostInterestManga + completedRewatchesManga {
+            updateCoreDataForItem(item)
+        }
+        
+        print("✅ Synced recovered items back to Core Data")
+    }
+    
+    private func checkForSavedPairwiseSession() {
+        // Check if there's a saved pairwise session from UserDefaults
+        hasSavedRankingSession = UserDefaults.standard.bool(forKey: PairwiseKeys.hasSavedSession)
+        
+        if hasSavedRankingSession {
+            // Load the basic session info
+            savedRankingCategory = UserDefaults.standard.string(forKey: PairwiseKeys.rankingCategory) ?? ""
+            savedCurrentPairIndex = UserDefaults.standard.integer(forKey: PairwiseKeys.currentPairIndex)
+            
+            // Load win counts
+            if let data = UserDefaults.standard.data(forKey: PairwiseKeys.winCounts) {
+                if let decoded = try? JSONDecoder().decode([Int: Int].self, from: data) {
+                    savedWinCounts = decoded
+                }
+            }
+            
+            // Try to load the full session info
+            if let session = UserDefaults.standard.getSavedPairwiseSession() {
+                print("📊 Found saved pairwise session for \(savedRankingCategory)")
+                activeRankingCategory = savedRankingCategory
+                currentPairIndex = savedCurrentPairIndex
+                winCounts = savedWinCounts
+                
+                // Recreate the pairwise comparison from the saved session
+                recreatePairwiseComparison(from: session)
+            } else {
+                print("⚠️ Failed to load saved pairwise session details")
                 hasSavedRankingSession = false
-                savedRankingCategory = ""
-                savedPairwiseComparison = []
-                savedCurrentPairIndex = 0
-                savedWinCounts = [:]
-                
-                // Clear in UserDefaults
-                UserDefaults.standard.clearSavedPairwiseSession()
             }
-            
-            // Load all data from CoreData into the RankingManager
-            func loadAllDataFromCoreData() {
-                // Clear existing data
-                currentlyWatching = []
-                currentlyReading = []
-                rankedAnime = []
-                rankedManga = []
-                wantToWatch = []
-                wantToRead = []
-                onHoldAnime = []
-                onHoldManga = []
-                lostInterestAnime = []
-                lostInterestManga = []
-                favoriteAnime = []
-                favoriteManga = []
-                completedRewatchesAnime = []
-                completedRewatchesManga = []
-                
-                // Load anime lists from Core Data
-                currentlyWatching = loadRankingItems(isAnime: true, status: "Currently Watching")
-                rankedAnime = loadRankingItems(isAnime: true, status: "Completed", isRewatch: false)
-                wantToWatch = loadRankingItems(isAnime: true, status: "Want to Watch")
-                onHoldAnime = loadRankingItems(isAnime: true, status: "On Hold")
-                lostInterestAnime = loadRankingItems(isAnime: true, status: "Lost Interest")
-                completedRewatchesAnime = loadRankingItems(isAnime: true, status: "Completed", isRewatch: true)
-                
-                // Load manga lists from Core Data
-                currentlyReading = loadRankingItems(isAnime: false, status: "Currently Reading")
-                rankedManga = loadRankingItems(isAnime: false, status: "Completed", isRewatch: false)
-                wantToRead = loadRankingItems(isAnime: false, status: "Want to Read")
-                onHoldManga = loadRankingItems(isAnime: false, status: "On Hold")
-                lostInterestManga = loadRankingItems(isAnime: false, status: "Lost Interest")
-                completedRewatchesManga = loadRankingItems(isAnime: false, status: "Completed", isRewatch: true)
-                
-                // If any lists are empty, try loading from UserDefaults backup
+        } else {
+            print("ℹ️ No saved pairwise session found")
+        }
+    }
+    
+    // Called when app launches or becomes active
+    func validateAndRecoverState() {
+        print("🔄 Validating RankingManager state")
+        
+        // Check if CoreData has entries 
+        let context = coreDataManager.container.viewContext
+        let fetchRequest: NSFetchRequest<AnimeItem> = AnimeItem.fetchRequest()
+        
+        do {
+            let results = try context.fetch(fetchRequest)
+            if results.isEmpty {
+                print("⚠️ No items found in CoreData, attempting recovery from backup")
                 recoverFromUserDefaultsIfNeeded()
-                
-                // Note: Character loading is not implemented yet
-                // When implemented, you would call a method like loadCharacters() here
+            } else {
+                print("✅ Found \(results.count) items in CoreData")
             }
-
-            // New method to recover lists from UserDefaults if Core Data is empty
-            private func recoverFromUserDefaultsIfNeeded() {
-                let savedItems = UserDefaults.standard.getSavedLibraryItems()
-                if !savedItems.isEmpty {
-                    print("📦 Found \(savedItems.count) items in UserDefaults backup")
-                    
-                    // Only recover lists that are empty
-                    if currentlyWatching.isEmpty {
-                        let recovered = savedItems.filter {
-                            $0.isAnime && $0.status == "Currently Watching" && !$0.isRewatch
-                        }.map { $0.toRankingItem() }
-                        if !recovered.isEmpty {
-                            print("🔄 Recovering \(recovered.count) Currently Watching items from backup")
-                            currentlyWatching = recovered
-                        }
-                    }
-                    
-                    if rankedAnime.isEmpty {
-                        let recovered = savedItems.filter {
-                            $0.isAnime && $0.status == "Completed" && !$0.isRewatch
-                        }.map { $0.toRankingItem() }
-                        if !recovered.isEmpty {
-                            print("🔄 Recovering \(recovered.count) Completed Anime items from backup")
-                            rankedAnime = recovered
-                        }
-                    }
-                    
-                    if wantToWatch.isEmpty {
-                        let recovered = savedItems.filter {
-                            $0.isAnime && $0.status == "Want to Watch"
-                        }.map { $0.toRankingItem() }
-                        if !recovered.isEmpty {
-                            print("🔄 Recovering \(recovered.count) Want to Watch items from backup")
-                            wantToWatch = recovered
-                        }
-                    }
-                    
-                    if onHoldAnime.isEmpty {
-                        let recovered = savedItems.filter {
-                            $0.isAnime && $0.status == "On Hold"
-                        }.map { $0.toRankingItem() }
-                        if !recovered.isEmpty {
-                            print("🔄 Recovering \(recovered.count) On Hold Anime items from backup")
-                            onHoldAnime = recovered
-                        }
-                    }
-                    
-                    if lostInterestAnime.isEmpty {
-                        let recovered = savedItems.filter {
-                            $0.isAnime && $0.status == "Lost Interest"
-                        }.map { $0.toRankingItem() }
-                        if !recovered.isEmpty {
-                            print("🔄 Recovering \(recovered.count) Lost Interest Anime items from backup")
-                            lostInterestAnime = recovered
-                        }
-                    }
-                    
-                    if completedRewatchesAnime.isEmpty {
-                        let recovered = savedItems.filter {
-                            $0.isAnime && $0.status == "Completed" && $0.isRewatch
-                        }.map { $0.toRankingItem() }
-                        if !recovered.isEmpty {
-                            print("🔄 Recovering \(recovered.count) Completed Rewatch Anime items from backup")
-                            completedRewatchesAnime = recovered
-                        }
-                    }
-                    
-                    // Manga lists recovery
-                    if currentlyReading.isEmpty {
-                        let recovered = savedItems.filter {
-                            !$0.isAnime && $0.status == "Currently Reading" && !$0.isRewatch
-                        }.map { $0.toRankingItem() }
-                        if !recovered.isEmpty {
-                            print("🔄 Recovering \(recovered.count) Currently Reading items from backup")
-                            currentlyReading = recovered
-                        }
-                    }
-                    
-                    if rankedManga.isEmpty {
-                        let recovered = savedItems.filter {
-                            !$0.isAnime && $0.status == "Completed" && !$0.isRewatch
-                        }.map { $0.toRankingItem() }
-                        if !recovered.isEmpty {
-                            print("🔄 Recovering \(recovered.count) Completed Manga items from backup")
-                            rankedManga = recovered
-                        }
-                    }
-                    
-                    if wantToRead.isEmpty {
-                        let recovered = savedItems.filter {
-                            !$0.isAnime && $0.status == "Want to Read"
-                        }.map { $0.toRankingItem() }
-                        if !recovered.isEmpty {
-                            print("🔄 Recovering \(recovered.count) Want to Read items from backup")
-                            wantToRead = recovered
-                        }
-                    }
-                    
-                    if onHoldManga.isEmpty {
-                        let recovered = savedItems.filter {
-                            !$0.isAnime && $0.status == "On Hold"
-                        }.map { $0.toRankingItem() }
-                        if !recovered.isEmpty {
-                            print("🔄 Recovering \(recovered.count) On Hold Manga items from backup")
-                            onHoldManga = recovered
-                        }
-                    }
-                    
-                    if lostInterestManga.isEmpty {
-                        let recovered = savedItems.filter {
-                            !$0.isAnime && $0.status == "Lost Interest"
-                        }.map { $0.toRankingItem() }
-                        if !recovered.isEmpty {
-                            print("🔄 Recovering \(recovered.count) Lost Interest Manga items from backup")
-                            lostInterestManga = recovered
-                        }
-                    }
-                    
-                    if completedRewatchesManga.isEmpty {
-                        let recovered = savedItems.filter {
-                            !$0.isAnime && $0.status == "Completed" && $0.isRewatch
-                        }.map { $0.toRankingItem() }
-                        if !recovered.isEmpty {
-                            print("🔄 Recovering \(recovered.count) Completed Reread Manga items from backup")
-                            completedRewatchesManga = recovered
-                        }
-                    }
-                    
-                    // After recovery, save any recovered items to Core Data
-                    syncRecoveredItemsToCoreData()
-                }
+        } catch {
+            print("❌ Error checking CoreData: \(error)")
+            recoverFromUserDefaultsIfNeeded()
+        }
+        
+        // Check if we need to recover an active pairwise session
+        checkForSavedPairwiseSession()
+        
+        // Validate rankings consistency
+        validateRankingConsistency()
+    }
+    
+    // Validate that rankings are consistent
+    private func validateRankingConsistency() {
+        // Check anime rankings
+        var needsReindexing = false
+        
+        // Check for rank gaps or duplicates in anime
+        let animeRanks = rankedAnime.map { $0.rank }.sorted()
+        for i in 0..<animeRanks.count {
+            if i+1 != animeRanks[i] {
+                print("⚠️ Inconsistent anime ranking: expected rank \(i+1), found \(animeRanks[i])")
+                needsReindexing = true
+                break
             }
+        }
+        
+        // Check for rank gaps or duplicates in manga
+        let mangaRanks = rankedManga.map { $0.rank }.sorted()
+        for i in 0..<mangaRanks.count {
+            if i+1 != mangaRanks[i] {
+                print("⚠️ Inconsistent manga ranking: expected rank \(i+1), found \(mangaRanks[i])")
+                needsReindexing = true
+                break
+            }
+        }
+        
+        // Fix inconsistent rankings if needed
+        if needsReindexing {
+            print("🔧 Reindexing rankings to fix inconsistencies")
+            reindexRankings()
+        }
+    }
+    
+    // Fix ranking inconsistencies by reindexing
+    private func reindexRankings() {
+        // Sort anime by rank (handling invalid ranks)
+        var sortedAnime = rankedAnime.sorted { 
+            ($0.rank > 0 ? $0.rank : Int.max) < ($1.rank > 0 ? $1.rank : Int.max) 
+        }
+        
+        // Update ranks
+        for i in 0..<sortedAnime.count {
+            sortedAnime[i] = RankingItem(
+                id: sortedAnime[i].id,
+                title: sortedAnime[i].title,
+                coverImage: sortedAnime[i].coverImage,
+                status: sortedAnime[i].status,
+                isAnime: true,
+                rank: i + 1,  // Updated rank
+                score: sortedAnime[i].score,
+                startDate: sortedAnime[i].startDate,
+                endDate: sortedAnime[i].endDate,
+                isRewatch: sortedAnime[i].isRewatch,
+                rewatchCount: sortedAnime[i].rewatchCount,
+                progress: sortedAnime[i].progress,
+                summary: sortedAnime[i].summary,
+                genres: sortedAnime[i].genres
+            )
+        }
+        
+        // Update the main array
+        rankedAnime = sortedAnime
+        
+        // Do the same for manga
+        var sortedManga = rankedManga.sorted { 
+            ($0.rank > 0 ? $0.rank : Int.max) < ($1.rank > 0 ? $1.rank : Int.max) 
+        }
+        
+        for i in 0..<sortedManga.count {
+            sortedManga[i] = RankingItem(
+                id: sortedManga[i].id,
+                title: sortedManga[i].title,
+                coverImage: sortedManga[i].coverImage,
+                status: sortedManga[i].status,
+                isAnime: false,
+                rank: i + 1,  // Updated rank
+                score: sortedManga[i].score,
+                startDate: sortedManga[i].startDate,
+                endDate: sortedManga[i].endDate,
+                isRewatch: sortedManga[i].isRewatch,
+                rewatchCount: sortedManga[i].rewatchCount,
+                progress: sortedManga[i].progress,
+                summary: sortedManga[i].summary,
+                genres: sortedManga[i].genres
+            )
+        }
+        
+        // Update the main array
+        rankedManga = sortedManga
+        
+        // Persist these changes
+        persistRankingResults()
+    }
+    
+    // Add this method for periodic auto-save
+    private func autoSaveChanges() {
+        if isPairwiseRankingActive {
+            print("⏱️ Auto-saving pairwise ranking session")
             
-            // Sync recovered items back to Core Data
-            private func syncRecoveredItemsToCoreData() {
-                // For each list, save items to Core Data
-                for item in currentlyWatching + rankedAnime + wantToWatch + onHoldAnime + lostInterestAnime +
-                           completedRewatchesAnime + currentlyReading + rankedManga + wantToRead +
-                           onHoldManga + lostInterestManga + completedRewatchesManga {
-                    updateCoreDataForItem(item)
-                }
-                
-                print("✅ Synced recovered items back to Core Data")
-            }
-
-            // Load RankingItems from Core Data for a given type and status.
-            func loadRankingItems(isAnime: Bool, status: String, isRewatch: Bool = false) -> [RankingItem] {
-                let animeItems = coreDataManager.fetchAnimeItems(isAnime: isAnime, status: status, isRewatch: isRewatch)
-                return animeItems.map { $0.toRankingItem() }
-            }
+            // Save the current pairwise state
+            UserDefaults.standard.set(true, forKey: "hasSavedRankingSession")
+            UserDefaults.standard.set(activeRankingCategory, forKey: "savedRankingCategory")
+            UserDefaults.standard.set(currentPairIndex, forKey: "savedCurrentPairIndex")
             
-            /*
-            // NOTE: Character management methods commented out
-            // These methods would require additional implementation in CoreDataManager
-            // or they should be implemented when you add character management features
-            
-            // Load characters from Core Data
-            func loadCharacters() {
-                // This would load characters from CoreData when implemented
-                // For now, we'll leave this method as a placeholder
-                print("Character loading not implemented yet")
+            if let encoded = try? JSONEncoder().encode(winCounts) {
+                UserDefaults.standard.set(encoded, forKey: "savedWinCounts")
             }
-            
-            // Character storage methods
-            func saveCharacterToStorage(_ character: CharacterRankItem) {
-                // This would save a character to CoreData when implemented
-                print("Character saving not implemented yet")
-            }
-            
-            func updateCharacterInStorage(_ character: CharacterRankItem) {
-                // This would update a character in CoreData when implemented
-                print("Character updating not implemented yet")
-            }
-            
-            func deleteCharacterFromStorage(_ characterId: Int) {
-                // This would delete a character from CoreData when implemented
-                print("Character deletion not implemented yet")
-            }
-            */
-
-            // Update Core Data for a RankingItem
-            func updateCoreDataForItem(_ item: RankingItem) {
-                // Get the Core Data context
-                let context = coreDataManager.container.viewContext
-
-                // Create or update AnimeItem in Core Data
-                _ = item.toAnimeItem(context: context)
-
-                // Save the context
-                coreDataManager.saveContext()
-            }
-            
-            /// Saves a single library change by updating the Core Data entry for the item.
-            func saveLibraryChange(for item: RankingItem) {
-                updateCoreDataForItem(item)
-                
-                // Also save to UserDefaults for development backup
-                UserDefaults.standard.saveLibraryItem(from: item)
-                
-                // Optionally, you could add additional logging or even UI feedback here.
-                print("Library change saved for item: \(item.title)")
-            }
-            
-            func updateRating(id: Int, isAnime: Bool, newRating: Double) {
-                // Find the item from your lists (example for anime)
-                if isAnime, let index = currentlyWatching.firstIndex(where: { $0.id == id }) {
-                    var item = currentlyWatching[index]
-                    item.score = newRating
-                    currentlyWatching[index] = item
-                    // Persist the change
-                    saveLibraryChange(for: item)
-                }
-                
-                // Check other anime lists
-                if isAnime, let index = rankedAnime.firstIndex(where: { $0.id == id }) {
-                    var item = rankedAnime[index]
-                    item.score = newRating
-                    rankedAnime[index] = item
-                    saveLibraryChange(for: item)
-                }
-                
-                if isAnime, let index = wantToWatch.firstIndex(where: { $0.id == id }) {
-                    var item = wantToWatch[index]
-                    item.score = newRating
-                    wantToWatch[index] = item
-                    saveLibraryChange(for: item)
-                }
-                
-                if isAnime, let index = onHoldAnime.firstIndex(where: { $0.id == id }) {
-                    var item = onHoldAnime[index]
-                    item.score = newRating
-                    onHoldAnime[index] = item
-                    saveLibraryChange(for: item)
-                }
-                
-                if isAnime, let index = lostInterestAnime.firstIndex(where: { $0.id == id }) {
-                    var item = lostInterestAnime[index]
-                    item.score = newRating
-                    lostInterestAnime[index] = item
-                    saveLibraryChange(for: item)
-                }
-                
-                // Manga lists
-                if !isAnime, let index = currentlyReading.firstIndex(where: { $0.id == id }) {
-                    var item = currentlyReading[index]
-                    item.score = newRating
-                    currentlyReading[index] = item
-                    saveLibraryChange(for: item)
-                }
-                
-                if !isAnime, let index = rankedManga.firstIndex(where: { $0.id == id }) {
-                    var item = rankedManga[index]
-                    item.score = newRating
-                    rankedManga[index] = item
-                    saveLibraryChange(for: item)
-                }
-                
-                if !isAnime, let index = wantToRead.firstIndex(where: { $0.id == id }) {
-                    var item = wantToRead[index]
-                    item.score = newRating
-                    wantToRead[index] = item
-                    saveLibraryChange(for: item)
-                }
-                
-                if !isAnime, let index = onHoldManga.firstIndex(where: { $0.id == id }) {
-                    var item = onHoldManga[index]
-                    item.score = newRating
-                    onHoldManga[index] = item
-                    saveLibraryChange(for: item)
-                }
-                
-                if !isAnime, let index = lostInterestManga.firstIndex(where: { $0.id == id }) {
-                    var item = lostInterestManga[index]
-                    item.score = newRating
-                    lostInterestManga[index] = item
-                    saveLibraryChange(for: item)
+        } else {
+            // Just save any pending changes
+            let context = coreDataManager.container.viewContext
+            if context.hasChanges {
+                do {
+                    try context.save()
+                    print("⏱️ Auto-saved pending CoreData changes")
+                } catch {
+                    print("❌ Error during auto-save: \(error)")
                 }
             }
         }
+    }
+}

@@ -207,65 +207,67 @@ extension AniListAPI {
             return
         }
         
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            if let error = error {
-                print("❌ Error: \(error.localizedDescription)")
-                completion(nil)
-                return
-            }
-            
-            guard let data = data else {
-                print("❌ Error: No data received")
-                completion(nil)
-                return
-            }
-            
-            do {
-                // Define local response structure to avoid conflicts
-                struct LocalAnimeRankingResponse: Codable {
-                    let data: LocalMediaRanking
+        APIRateLimiter.shared.executeRequest {
+            URLSession.shared.dataTask(with: request) { data, response, error in
+                if let error = error {
+                    print("❌ Error: \(error.localizedDescription)")
+                    completion(nil)
+                    return
                 }
                 
-                struct LocalMediaRanking: Codable {
-                    let Media: Anime
+                guard let data = data else {
+                    print("❌ Error: No data received")
+                    completion(nil)
+                    return
                 }
                 
-                let decoder = JSONDecoder()
-                let decodedResponse = try decoder.decode(LocalAnimeRankingResponse.self, from: data)
-                
-                let mediaData = decodedResponse.data.Media
-                
-                // Debug output for rankings specifically
-                print("🏆 Rankings information for anime ID \(mediaData.id):")
-                if let rankings = mediaData.rankings {
-                    print("- Found \(rankings.count) rankings")
-                    
-                    for (index, rank) in rankings.enumerated() {
-                        print("  • Ranking \(index + 1): Type=\(rank.type), Rank=#\(rank.rank), Context=\(rank.context)")
+                do {
+                    // Define local response structure to avoid conflicts
+                    struct LocalAnimeRankingResponse: Codable {
+                        let data: LocalMediaRanking
                     }
                     
-                    // Look specifically for popularity ranking
-                    if let popularRank = rankings.first(where: { $0.type == "POPULAR" }) {
-                        print("  ★ POPULAR rank = #\(popularRank.rank)")
+                    struct LocalMediaRanking: Codable {
+                        let Media: Anime
+                    }
+                    
+                    let decoder = JSONDecoder()
+                    let decodedResponse = try decoder.decode(LocalAnimeRankingResponse.self, from: data)
+                    
+                    let mediaData = decodedResponse.data.Media
+                    
+                    // Debug output for rankings specifically
+                    print("🏆 Rankings information for anime ID \(mediaData.id):")
+                    if let rankings = mediaData.rankings {
+                        print("- Found \(rankings.count) rankings")
+                        
+                        for (index, rank) in rankings.enumerated() {
+                            print("  • Ranking \(index + 1): Type=\(rank.type), Rank=#\(rank.rank), Context=\(rank.context)")
+                        }
+                        
+                        // Look specifically for popularity ranking
+                        if let popularRank = rankings.first(where: { $0.type == "POPULAR" }) {
+                            print("  ★ POPULAR rank = #\(popularRank.rank)")
+                        } else {
+                            print("  ⚠️ No POPULAR ranking found!")
+                        }
                     } else {
-                        print("  ⚠️ No POPULAR ranking found!")
+                        print("- No rankings data found!")
                     }
-                } else {
-                    print("- No rankings data found!")
+                    
+                    // Make sure to complete on main thread
+                    DispatchQueue.main.async {
+                        completion(decodedResponse.data.Media)
+                    }
+                } catch {
+                    print("❌ JSON Decoding Error:", error)
+                    if let responseString = String(data: data, encoding: .utf8) {
+                        print("Raw response (first 500 chars): \(String(responseString.prefix(500)))")
+                    }
+                    completion(nil)
                 }
-                
-                // Make sure to complete on main thread
-                DispatchQueue.main.async {
-                    completion(decodedResponse.data.Media)
-                }
-            } catch {
-                print("❌ JSON Decoding Error:", error)
-                if let responseString = String(data: data, encoding: .utf8) {
-                    print("Raw response (first 500 chars): \(String(responseString.prefix(500)))")
-                }
-                completion(nil)
-            }
-        }.resume()
+            }.resume()
+        }
     }
     
     func searchAnime(query: String, completion: @escaping ([Anime]?) -> Void) {
