@@ -30,6 +30,10 @@ struct PairwiseRankingView: View {
     @State private var isCharacterRanking = false
     @State private var favoriteCharacters: [Int] = []
     
+    // States for recovery
+       @State private var isRecovering = false
+       @State private var recoveryMessage = ""
+    
     var body: some View {
         ZStack {
             // Background image
@@ -665,6 +669,53 @@ struct PairwiseRankingView: View {
         
         // Clear win counts for next time
         rankingManager.winCounts.removeAll()
+    }
+    extension PairwiseRankingView {
+        // Add this method to handle automatic saving on disappear
+        private func autosaveRankingSession() {
+            // Don't save if we've completed the ranking or if there are no items to rank
+            if rankingManager.pairwiseCompleted ||
+               rankingManager.pairwiseComparison.isEmpty ||
+               rankingManager.currentPairIndex <= 0 {
+                return
+            }
+            
+            // Save the session
+            print("📊 Auto-saving pairwise ranking session at index \(rankingManager.currentPairIndex)...")
+            rankingManager.saveRankingSession()
+        }
+        
+        // Add recovery method in case something goes wrong
+        private func recoverRankingSessionIfNeeded() {
+            // Only attempt recovery if we have a saved session
+            if rankingManager.hasSavedRankingSession &&
+               rankingManager.savedRankingCategory == category &&
+               rankingManager.savedPairwiseComparison.isEmpty &&
+               rankingManager.pairwiseComparison.isEmpty {
+                
+                print("🔄 Attempting to recover pairwise ranking session...")
+                
+                // Force a reload from UserDefaults
+                rankingManager.loadFromPersistentStorage()
+                
+                // If we successfully recovered the session
+                if !rankingManager.savedPairwiseComparison.isEmpty {
+                    // Restore the active session from the saved one
+                    rankingManager.activeRankingCategory = rankingManager.savedRankingCategory
+                    rankingManager.pairwiseComparison = rankingManager.savedPairwiseComparison
+                    rankingManager.currentPairIndex = rankingManager.savedCurrentPairIndex
+                    rankingManager.winCounts = rankingManager.savedWinCounts
+                    rankingManager.isPairwiseRankingActive = true
+                    rankingManager.pairwiseCompleted = false
+                    
+                    // Update our local state
+                    pairIndex = rankingManager.currentPairIndex
+                    totalPairs = rankingManager.pairwiseComparison.count
+                    
+                    print("✅ Successfully recovered session with \(totalPairs) pairs, currently at pair \(pairIndex)")
+                }
+            }
+        }
     }
 }
 
